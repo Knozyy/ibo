@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+node_modules/
+dist/
+.vite/
+postgres_data/
+redis_data/
+media/videos/*
+media/thumbnails/*
+!media/videos/.gitkeep
+!media/thumbnails/.gitkeep
