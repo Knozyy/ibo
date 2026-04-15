@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.database import AsyncSessionLocal, engine, Base
 from app.config import settings
+import app.models  # noqa: F401 — tüm modelleri Base.metadata'ya kaydet
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
