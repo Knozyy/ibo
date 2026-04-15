@@ -50,7 +50,7 @@ class VideoRepository:
         return video
 
     async def delete(self, video: Video) -> None:
-        await self.db.delete(video)
+        self.db.delete(video)
         await self.db.commit()
 
     async def update_status(self, video_id: uuid.UUID, status: VideoStatus) -> None:
