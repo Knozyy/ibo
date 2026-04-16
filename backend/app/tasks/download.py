@@ -21,15 +21,21 @@ class _NoRetryError(Exception):
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def download_video(self, video_id: str):
     """Video indir. Network hatasında 3 kez retry, DRM/not-found'da direkt fail."""
+    # Tek asyncio.run() — birden fazla çağrı farklı loop'lar açar,
+    # asyncpg future'ları çakışır. Her şeyi tek coroutine'de halledelim.
+    asyncio.run(_run(self, video_id))
+
+
+async def _run(task, video_id: str) -> None:
     try:
-        asyncio.run(_execute_download(video_id))
+        await _execute_download(video_id)
     except _NoRetryError as e:
-        asyncio.run(_mark_failed(video_id, str(e)))
+        await _mark_failed(video_id, str(e))
     except Exception as exc:
         try:
-            raise self.retry(exc=exc)
-        except self.MaxRetriesExceededError:
-            asyncio.run(_mark_failed(video_id, f"Max retries exceeded: {str(exc)[:400]}"))
+            raise task.retry(exc=exc)
+        except task.MaxRetriesExceededError:
+            await _mark_failed(video_id, f"Max retries exceeded: {str(exc)[:400]}")
 
 
 async def _execute_download(video_id: str) -> None:
