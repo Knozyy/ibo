@@ -58,15 +58,16 @@ async def _execute_download(video_id: str) -> None:
     outtmpl = str(videos_dir / f"{video_id}.%(ext)s")
 
     ydl_opts = {
-        # mp4+m4a tercih et, yoksa en iyi kaliteyi al
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+        # Format kısıtlaması yok — her sitede çalışır, merge ile mp4'e dönüştür
+        "format": "bestvideo+bestaudio/best",
         "outtmpl": outtmpl,
-        "quiet": True,
-        "no_warnings": True,
         "merge_output_format": "mp4",
-        # Twitter/X ve diğer siteler için
+        # quiet=False bırakıyoruz ki worker logda hata görebilelim
+        "quiet": False,
+        "no_warnings": False,
         "nocheckcertificate": True,
         "extractor_retries": 3,
+        "socket_timeout": 30,
     }
 
     # 3. yt-dlp ile indir
@@ -76,9 +77,12 @@ async def _execute_download(video_id: str) -> None:
     except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
         raise _NoRetryError(str(e)[:500])
 
-    # 4. İndirilen dosyayı disk'te bul (merge_output_format=mp4 olsa bile
-    #    info["ext"] bazen farklı dönebilir — güvenli yol: glob ile tara)
-    candidates = list(videos_dir.glob(f"{video_id}.*"))
+    # 4. İndirilen dosyayı disk'te bul — glob ile gerçek uzantıyı bul
+    #    (merge_output_format=mp4 olsa bile temp dosyalar farklı ext'le kalabilir)
+    candidates = [
+        f for f in videos_dir.glob(f"{video_id}.*")
+        if not f.suffix in (".part", ".ytdl")  # temp dosyaları atla
+    ]
     if not candidates:
         raise _NoRetryError("İndirme tamamlandı fakat dosya disk'te bulunamadı.")
     video_full_path = str(candidates[0])
