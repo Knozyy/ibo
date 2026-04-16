@@ -9,7 +9,7 @@ bcrypt==4.0.1
 python-jose[cryptography]==3.3.0
 celery[redis]==5.4.0
 redis==5.2.0
-yt-dlp==2024.11.18
+yt-dlp>=2025.1.15
 python-multipart==0.0.19
 httpx==0.28.0
 pytest==8.3.3
