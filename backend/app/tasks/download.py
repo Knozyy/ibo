@@ -1,14 +1,15 @@
 import asyncio
 import subprocess
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 import yt_dlp
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.celery_app import celery_app
 from app.config import settings
-from app.database import AsyncSessionLocal
 from app.models.video import VideoStatus
 from app.repositories.videos import VideoRepository
 
@@ -18,11 +19,31 @@ class _NoRetryError(Exception):
     pass
 
 
+@asynccontextmanager
+async def _task_db() -> AsyncSession:
+    """
+    Celery task için fork-safe DB bağlantısı.
+    AsyncSessionLocal modül seviyesinde oluşturulur, Celery fork'layınca
+    engine'in iç asyncpg bağlantıları eski event loop'a bağlı kalır.
+    Her task çağrısında yeni engine açıp kapatarak bunu önlüyoruz.
+    """
+    engine = create_async_engine(
+        settings.database_url,
+        pool_size=1,
+        max_overflow=0,
+        pool_pre_ping=True,
+    )
+    try:
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def download_video(self, video_id: str):
     """Video indir. Network hatasında 3 kez retry, DRM/not-found'da direkt fail."""
-    # Tek asyncio.run() — birden fazla çağrı farklı loop'lar açar,
-    # asyncpg future'ları çakışır. Her şeyi tek coroutine'de halledelim.
     asyncio.run(_run(self, video_id))
 
 
@@ -40,7 +61,7 @@ async def _run(task, video_id: str) -> None:
 
 async def _execute_download(video_id: str) -> None:
     # 1. Video bilgilerini al ve status güncelle
-    async with AsyncSessionLocal() as db:
+    async with _task_db() as db:
         repo = VideoRepository(db)
         video = await repo.get_by_id(uuid.UUID(video_id))
         if not video:
@@ -58,11 +79,9 @@ async def _execute_download(video_id: str) -> None:
     outtmpl = str(videos_dir / f"{video_id}.%(ext)s")
 
     ydl_opts = {
-        # Format kısıtlaması yok — her sitede çalışır, merge ile mp4'e dönüştür
         "format": "bestvideo+bestaudio/best",
         "outtmpl": outtmpl,
         "merge_output_format": "mp4",
-        # quiet=False bırakıyoruz ki worker logda hata görebilelim
         "quiet": False,
         "no_warnings": False,
         "nocheckcertificate": True,
@@ -77,11 +96,10 @@ async def _execute_download(video_id: str) -> None:
     except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
         raise _NoRetryError(str(e)[:500])
 
-    # 4. İndirilen dosyayı disk'te bul — glob ile gerçek uzantıyı bul
-    #    (merge_output_format=mp4 olsa bile temp dosyalar farklı ext'le kalabilir)
+    # 4. İndirilen dosyayı disk'te bul (.part ve .ytdl temp dosyaları atla)
     candidates = [
         f for f in videos_dir.glob(f"{video_id}.*")
-        if not f.suffix in (".part", ".ytdl")  # temp dosyaları atla
+        if f.suffix not in (".part", ".ytdl")
     ]
     if not candidates:
         raise _NoRetryError("İndirme tamamlandı fakat dosya disk'te bulunamadı.")
@@ -89,7 +107,7 @@ async def _execute_download(video_id: str) -> None:
     actual_ext = candidates[0].suffix.lstrip(".")
     file_path = f"/media/videos/{video_id}.{actual_ext}"
 
-    # 4. Thumbnail çıkar (ffmpeg)
+    # 5. Thumbnail çıkar (ffmpeg)
     thumbnail_path_str = str(thumbnails_dir / f"{video_id}.jpg")
     thumb_result = subprocess.run(
         [
@@ -103,13 +121,13 @@ async def _execute_download(video_id: str) -> None:
         f"/media/thumbnails/{video_id}.jpg" if thumb_result.returncode == 0 else None
     )
 
-    # 5. DB güncelle
-    async with AsyncSessionLocal() as db:
+    # 6. DB güncelle
+    async with _task_db() as db:
         repo = VideoRepository(db)
         await repo.update_completed(uuid.UUID(video_id), file_path, thumb_path)
 
 
 async def _mark_failed(video_id: str, error_message: str) -> None:
-    async with AsyncSessionLocal() as db:
+    async with _task_db() as db:
         repo = VideoRepository(db)
         await repo.update_failed(uuid.UUID(video_id), error_message)
