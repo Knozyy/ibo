@@ -42,6 +42,14 @@ async def _seed_admin():
 
 app = FastAPI(title="VideoPortal API", lifespan=lifespan)
 
+from app.routers import auth as auth_router
+from app.routers import categories as categories_router
+from app.routers import videos as videos_router
+
+app.include_router(auth_router.router, prefix="/api")
+app.include_router(categories_router.router, prefix="/api")
+app.include_router(videos_router.router, prefix="/api")
+
 
 @app.get("/api/health")
 async def health():
