@@ -52,23 +52,32 @@ async def _execute_download(video_id: str) -> None:
     outtmpl = str(videos_dir / f"{video_id}.%(ext)s")
 
     ydl_opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        # mp4+m4a tercih et, yoksa en iyi kaliteyi al
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
         "outtmpl": outtmpl,
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": "mp4",
+        # Twitter/X ve diğer siteler için
+        "nocheckcertificate": True,
+        "extractor_retries": 3,
     }
 
     # 3. yt-dlp ile indir
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(original_url, download=True)
-            ext = info.get("ext", "mp4") if info else "mp4"
+            ydl.extract_info(original_url, download=True)
     except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
         raise _NoRetryError(str(e)[:500])
 
-    file_path = f"/media/videos/{video_id}.{ext}"
-    video_full_path = str(videos_dir / f"{video_id}.{ext}")
+    # 4. İndirilen dosyayı disk'te bul (merge_output_format=mp4 olsa bile
+    #    info["ext"] bazen farklı dönebilir — güvenli yol: glob ile tara)
+    candidates = list(videos_dir.glob(f"{video_id}.*"))
+    if not candidates:
+        raise _NoRetryError("İndirme tamamlandı fakat dosya disk'te bulunamadı.")
+    video_full_path = str(candidates[0])
+    actual_ext = candidates[0].suffix.lstrip(".")
+    file_path = f"/media/videos/{video_id}.{actual_ext}"
 
     # 4. Thumbnail çıkar (ffmpeg)
     thumbnail_path_str = str(thumbnails_dir / f"{video_id}.jpg")
